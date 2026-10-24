@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moniteur PPG Web Bluetooth (ESP32)</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --accent: #00e676;
+            --primary: #0ea5e9;
+            --danger: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-main);
+            padding: 2rem;
+            max-width: 960px;
+            margin: 0 auto;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            padding-bottom: 1.25rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+        }
+        h1 { font-size: 1.5rem; font-weight: 600; }
+        .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem; }
+        .controls { display: flex; gap: 0.75rem; align-items: center; }
+        .btn {
+            background: var(--primary);
+            border: none;
+            color: white;
+            padding: 0.65rem 1.25rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .badge {
+            padding: 0.4rem 0.85rem;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .badge.connected {
+            background: rgba(0, 230, 118, 0.15);
+            color: var(--accent);
+            border-color: rgba(0, 230, 118, 0.3);
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+        }
+        canvas {
+            width: 100%;
+            height: 260px;
+            background: #090d16;
+            border-radius: 8px;
+            display: block;
+        }
+        #console {
+            background: #090d16;
+            border: 1px solid var(--border);
+            padding: 1rem;
+            border-radius: 8px;
+            height: 180px;
+            overflow-y: auto;
+            font-family: Consolas, monospace;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div>
+            <h1>Moniteur Cardiaque PPG — Interface Web BLE</h1>
+            <p class="subtitle">Réception temps réel via Web Bluetooth API (Service UART Nordic NUS - 50 Hz)</p>
+        </div>
+        <div class="controls">
+            <span id="statusLabel" class="badge">Déconnecté</span>
+            <button class="btn" id="connectBtn">Connexion BLE (ESP32)</button>
+        </div>
+    </header>
+
+    <div class="card">
+        <canvas id="ppgCanvas" width="880" height="260"></canvas>
+    </div>
+
+    <div class="card">
+        <div id="console">En attente de connexion au périphérique « Biomedical_PPG_ESP32 »...<br></div>
+    </div>
+
+    <script>
+        const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+        const TX_CHARACTERISTIC_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+        const connectBtn = document.getElementById('connectBtn');
+        const statusLabel = document.getElementById('statusLabel');
+        const consoleDiv = document.getElementById('console');
+        const canvas = document.getElementById('ppgCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const BUFFER_SIZE = 300;
+        const dataBuffer = new Array(BUFFER_SIZE).fill(2048);
+
+        function log(message) {
+            const timeStr = new Date().toISOString().split('T')[1].slice(0, -1);
+            consoleDiv.innerHTML += `[${timeStr}] ${message}<br>`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        function drawWaveform() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Grille légère
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 1;
+            for (let y = 0; y < canvas.height; y += 52) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            const minVal = Math.min(...dataBuffer);
+            const maxVal = Math.max(...dataBuffer);
+            const range = Math.max(10, maxVal - minVal);
+
+            ctx.strokeStyle = '#00e676';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            for (let i = 0; i < BUFFER_SIZE; i++) {
+                const x = (i / (BUFFER_SIZE - 1)) * canvas.width;
+                const normY = (dataBuffer[i] - minVal) / range;
+                const y = canvas.height - 20 - normY * (canvas.height - 40);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        drawWaveform();
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                if (!navigator.bluetooth) {
+                    log("Erreur : Web Bluetooth n'est pas pris en charge par ce navigateur (utilisez Chrome ou Edge).");
+                    return;
+                }
+
+                log("Recherche du module ESP32...");
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'Biomedical_PPG_ESP32' }],
+                    optionalServices: [UART_SERVICE_UUID]
+                });
+
+                log(`Appareil détecté : ${device.name}. Connexion GATT...`);
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(UART_SERVICE_UUID);
+                const characteristic = await service.getCharacteristic(TX_CHARACTERISTIC_UUID);
+
+                statusLabel.innerText = "Connecté";
+                statusLabel.className = "badge connected";
+                log("Notifications BLE activées. Réception du flux PPG à 50 Hz...");
+
+                await characteristic.startNotifications();
+                const decoder = new TextDecoder('utf-8');
+
+                characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    const rawData = decoder.decode(event.target.value).trim();
+                    const numericVal = parseInt(rawData, 10);
+                    if (!Number.isNaN(numericVal)) {
+                        dataBuffer.shift();
+                        dataBuffer.push(numericVal);
+                        drawWaveform();
+                    }
+                });
+            } catch (error) {
+                log(`Erreur : ${error.message}`);
+                statusLabel.innerText = "Erreur";
+                statusLabel.className = "badge";
+            }
+        });
+    </script>
+</body>
+</html>
