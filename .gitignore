@@ -1,0 +1,33 @@
+# Environnements virtuels Python
+venv/
+.venv/
+env/
+ENV/
+
+# Fichiers compilés et cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# PyInstaller / Packaging
+build/
+dist/
+*.spec
+
+# Données patients / enregistrements locaux (ne pas versionner les données médicales)
+Suivi_Patients_BPM.xlsx
+mes_donnees_pouls.txt
+*.csv
+*.xlsx
+
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Fichiers système (Windows / macOS / Linux)
+Thumbs.db
+Desktop.ini
+.DS_Store
